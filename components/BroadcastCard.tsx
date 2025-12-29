@@ -1,6 +1,6 @@
 
 import React from 'react';
-import { Broadcast } from '../types';
+import { Broadcast, BroadcastMode } from '../types';
 import * as gemini from '../services/geminiService';
 
 interface BroadcastCardProps {
@@ -30,8 +30,13 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({ broadcast, onPlay }) => {
           <div className="absolute inset-0 bg-cyan-500/10 group-hover:bg-pink-500/10 transition-colors" />
         </div>
         <div className="flex-1 min-w-0">
-          <h3 className="text-cyan-400 font-bold truncate group-hover:text-pink-400 transition-colors">{broadcast.title}</h3>
-          <p className="text-slate-500 text-xs italic mb-1">"{broadcast.prompt}"</p>
+          <div className="flex items-center gap-2 mb-0.5">
+            <h3 className="text-cyan-400 font-bold truncate group-hover:text-pink-400 transition-colors">{broadcast.title}</h3>
+            <span className={`text-[7px] px-1 rounded-sm border ${broadcast.mode === BroadcastMode.MANUAL ? 'border-pink-500/50 text-pink-500' : 'border-cyan-500/50 text-cyan-500'} uppercase font-bold`}>
+              {broadcast.mode === BroadcastMode.MANUAL ? 'Direct' : 'Synthetic'}
+            </span>
+          </div>
+          <p className="text-slate-500 text-[10px] italic truncate mb-1">"{broadcast.prompt}"</p>
           <p className="text-slate-400 text-sm line-clamp-2 leading-tight">{broadcast.script}</p>
         </div>
         <div className="flex flex-col gap-2 justify-center">

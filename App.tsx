@@ -2,42 +2,49 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as gemini from './services/geminiService';
 import * as db from './services/supabaseService';
-import { Broadcast, RadioState } from './types';
+import { Broadcast, RadioState, BroadcastMode } from './types';
 import AudioVisualizer from './components/AudioVisualizer';
 import BroadcastCard from './components/BroadcastCard';
 
 const App: React.FC = () => {
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
   const [prompt, setPrompt] = useState('');
+  const [mode, setMode] = useState<BroadcastMode>(BroadcastMode.CREATIVE);
   const [radioState, setRadioState] = useState<RadioState>(RadioState.IDLE);
   const [activeBroadcast, setActiveBroadcast] = useState<Broadcast | null>(null);
   const [generationStep, setGenerationStep] = useState('');
   const [quota, setQuota] = useState<db.QuotaData>({ count: 0, resetAt: 0 });
+  const [isLoading, setIsLoading] = useState(true);
+  const [schemaValid, setSchemaValid] = useState(true);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
 
-  useEffect(() => {
-    const fetchHistory = async () => {
+  const refreshAppData = async () => {
+    try {
       const history = await db.getBroadcasts();
       setBroadcasts(history);
-      setQuota(db.getQuota());
-    };
-    fetchHistory();
+      const quotaData = await db.getQuota();
+      setQuota(quotaData);
+      setSchemaValid(db.isSchemaValid());
+    } catch (e) {
+      console.error("Initialization Error:", e);
+    } finally {
+      setIsLoading(false);
+    }
+  };
 
-    // Check quota every minute to handle resets while app is open
-    const interval = setInterval(() => {
-      setQuota(db.getQuota());
-    }, 60000);
+  useEffect(() => {
+    refreshAppData();
+    const interval = setInterval(refreshAppData, 60000);
     return () => clearInterval(interval);
   }, []);
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
     
-    // Final check before proceeding
-    const currentQuota = db.getQuota();
+    const currentQuota = await db.getQuota();
     if (currentQuota.count >= 5) {
       setRadioState(RadioState.ERROR);
       setGenerationStep('DAILY QUOTA EXHAUSTED');
@@ -48,10 +55,10 @@ const App: React.FC = () => {
     setGenerationStep('TUNING ENCRYPTION...');
     
     try {
-      setTimeout(() => setGenerationStep('SKETCHING VISUAL FREQUENCIES...'), 1500);
-      setTimeout(() => setGenerationStep('SYNTHESIZING AUDIO WAVEFORM...'), 3000);
+      setTimeout(() => setGenerationStep(mode === BroadcastMode.CREATIVE ? 'BRAIN-LINK SYNC...' : 'RAW-STREAM PACKETIZING...'), 1000);
+      setTimeout(() => setGenerationStep('RENDER VISUAL BUFFER...'), 2500);
 
-      const data = await gemini.generateBroadcastData(prompt);
+      const data = await gemini.generateBroadcastData(prompt, mode);
       
       const newBroadcast: Broadcast = {
         id: Math.random().toString(36).substring(7),
@@ -60,12 +67,17 @@ const App: React.FC = () => {
         script: data.script || '',
         audioData: data.audioData || '',
         imageUrl: data.imageUrl || '',
+        mode: mode,
         createdAt: data.createdAt || Date.now()
       };
 
       await db.saveBroadcast(newBroadcast);
-      setBroadcasts(prev => [newBroadcast, ...prev]);
-      setQuota(db.getQuota()); // Refresh local quota state
+      
+      setBroadcasts(prev => [newBroadcast, ...prev].slice(0, 30));
+      const updatedQuota = await db.getQuota();
+      setQuota(updatedQuota);
+      setSchemaValid(db.isSchemaValid());
+      
       setPrompt('');
       playBroadcast(newBroadcast);
     } catch (error) {
@@ -134,16 +146,26 @@ const App: React.FC = () => {
 
   const isQuotaExhausted = quota.count >= 5;
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-slate-950 text-cyan-500 font-mono italic">
+        <div className="w-12 h-12 border-4 border-cyan-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <div className="animate-pulse tracking-[0.4em] uppercase text-xs">Pinging Night City Nodes...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen p-4 md:p-8 flex flex-col items-center max-w-6xl mx-auto relative">
-      {/* Noise layer */}
       <div className="fixed inset-0 pointer-events-none opacity-[0.03] bg-[url('https://www.transparenttextures.com/patterns/asfalt-dark.png')]" />
 
       <header className="w-full mb-8 text-center relative">
-        <div className="absolute top-0 right-0 text-[10px] text-pink-500 font-mono hidden md:block animate-pulse text-right">
-          ENCRYPTION: AES-256 <br/>
-          VOICE-LINK: KORE-ACTIVE <br/>
-          QUOTA-LIMIT: 5/24H
+        <div className="absolute top-0 right-0 text-[10px] font-mono hidden md:block animate-pulse text-right">
+          <span className={schemaValid ? "text-pink-500" : "text-yellow-500"}>
+            STORAGE: {schemaValid ? 'SUPABASE_CLOUD' : 'SCHEMA_MISSING_FALLBACK'}
+          </span> <br/>
+          <span className="text-pink-500">VOICE-LINK: KORE-ACTIVE</span> <br/>
+          <span className="text-pink-500">QUOTA-LIMIT: 5/24H</span>
         </div>
         <h1 className="text-4xl md:text-7xl font-black italic orbitron neon-text tracking-tighter mb-2">
           REBEL <span className="text-pink-500 pink-neon-text">RADIO</span>
@@ -156,6 +178,12 @@ const App: React.FC = () => {
            <div className="h-[1px] w-12 bg-cyan-900"></div>
         </div>
       </header>
+
+      {!schemaValid && (
+        <div className="w-full bg-yellow-500/10 border border-yellow-500/50 p-2 mb-6 rounded text-center text-[10px] text-yellow-500 uppercase tracking-widest font-bold animate-pulse">
+          WARNING: Supabase tables 'broadcasts' & 'quotas' not found. App is running in Local Fallback mode.
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 w-full relative z-10">
         <div className="lg:col-span-7 flex flex-col gap-6">
@@ -215,7 +243,7 @@ const App: React.FC = () => {
                     {activeBroadcast?.title || 'System Standby'}
                   </h2>
                   <p className="text-slate-400 text-sm italic mt-1 overflow-hidden line-clamp-3 font-mono leading-snug">
-                    {activeBroadcast?.script || 'Awaiting rebel input. Enter a vibe to initiate waveform synthesis.'}
+                    {activeBroadcast?.script || 'Awaiting rebel input. Choose a mode and initiate waveform synthesis.'}
                   </p>
                 </div>
               </div>
@@ -223,8 +251,24 @@ const App: React.FC = () => {
           </section>
 
           <section className="bg-slate-900/80 p-6 rounded-xl pink-neon-border backdrop-blur-md">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-pink-500 uppercase font-bold text-[10px] tracking-[0.3em]">Signal Synthesis Command</h2>
+            <div className="flex flex-col md:flex-row items-center justify-between mb-4 gap-4">
+              <div className="flex bg-black/40 p-1 rounded-lg border border-pink-500/20">
+                <button 
+                  onClick={() => setMode(BroadcastMode.CREATIVE)}
+                  className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-[10px] font-bold transition-all uppercase tracking-widest ${mode === BroadcastMode.CREATIVE ? 'bg-cyan-500/20 text-cyan-400 neon-border' : 'text-slate-600 hover:text-slate-400'}`}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/></svg>
+                  Brain-Link
+                </button>
+                <button 
+                  onClick={() => setMode(BroadcastMode.MANUAL)}
+                  className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-[10px] font-bold transition-all uppercase tracking-widest ${mode === BroadcastMode.MANUAL ? 'bg-pink-500/20 text-pink-500 pink-neon-border' : 'text-slate-600 hover:text-slate-400'}`}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="12" y2="5"/></svg>
+                  Raw-Data
+                </button>
+              </div>
+
               <div className="flex items-center gap-2">
                 <span className="text-[10px] text-slate-500 uppercase font-bold">Quota:</span>
                 <div className="flex gap-1">
@@ -246,16 +290,16 @@ const App: React.FC = () => {
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 disabled={isQuotaExhausted}
-                placeholder={isQuotaExhausted ? "ENCRYPTION LIMIT REACHED. WAIT FOR SIGNAL REGEN." : "PROMPT: Describe the sound of the resistance..."}
-                className={`bg-black/80 border rounded-lg p-4 font-mono text-sm transition-all min-h-[100px] resize-none focus:outline-none focus:ring-1 ${isQuotaExhausted ? 'border-slate-800 text-slate-700 cursor-not-allowed' : 'border-pink-500/30 text-pink-400 placeholder-pink-900/40 focus:border-pink-500 focus:ring-pink-500'}`}
+                placeholder={isQuotaExhausted ? "ENCRYPTION LIMIT REACHED. WAIT FOR SIGNAL REGEN." : mode === BroadcastMode.CREATIVE ? "PROMPT: Describe a vibe, atmosphere, or feeling..." : "TERMINAL: Enter the literal text for Kore to broadcast..."}
+                className={`bg-black/80 border rounded-lg p-4 font-mono text-sm transition-all min-h-[100px] resize-none focus:outline-none focus:ring-1 ${isQuotaExhausted ? 'border-slate-800 text-slate-700 cursor-not-allowed' : mode === BroadcastMode.CREATIVE ? 'border-cyan-500/30 text-cyan-400 placeholder-cyan-900/40 focus:border-cyan-500 focus:ring-cyan-500' : 'border-pink-500/30 text-pink-400 placeholder-pink-900/40 focus:border-pink-500 focus:ring-pink-500'}`}
               />
               <button 
                 onClick={handleGenerate}
                 disabled={radioState === RadioState.GENERATING || !prompt.trim() || isQuotaExhausted}
-                className="group relative bg-pink-600 hover:bg-pink-500 disabled:bg-slate-900 disabled:text-slate-700 text-white font-bold py-4 rounded-lg uppercase tracking-[0.2em] transition-all overflow-hidden"
+                className={`group relative font-bold py-4 rounded-lg uppercase tracking-[0.2em] transition-all overflow-hidden ${mode === BroadcastMode.CREATIVE ? 'bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-900' : 'bg-pink-600 hover:bg-pink-500 disabled:bg-slate-900'} text-white`}
               >
                 <span className="relative z-10">
-                  {isQuotaExhausted ? 'QUOTA DEPLETED' : radioState === RadioState.GENERATING ? 'TRANSMITTING...' : 'INITIATE BROADCAST'}
+                  {isQuotaExhausted ? 'QUOTA DEPLETED' : radioState === RadioState.GENERATING ? 'TRANSMITTING...' : mode === BroadcastMode.CREATIVE ? 'INITIATE BRAIN-LINK' : 'STREAM RAW-DATA'}
                 </span>
                 {!isQuotaExhausted && (
                   <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
@@ -268,7 +312,7 @@ const App: React.FC = () => {
         <div className="lg:col-span-5 flex flex-col h-[calc(100vh-280px)] min-h-[450px]">
           <div className="flex items-center justify-between mb-4 px-2">
             <h2 className="text-cyan-400 uppercase font-bold text-[10px] tracking-[0.3em]">Archives</h2>
-            <span className="text-cyan-900 text-[8px] font-mono uppercase">Decrypted Logs: {broadcasts.length}</span>
+            <span className="text-cyan-900 text-[8px] font-mono uppercase">Node Signal Count: {broadcasts.length}</span>
           </div>
           <div className="flex-1 overflow-y-auto pr-2 space-y-4 scroll-smooth custom-scrollbar">
             {broadcasts.length === 0 ? (

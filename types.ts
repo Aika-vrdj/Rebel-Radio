@@ -7,6 +7,12 @@ export interface Broadcast {
   audioData: string; // Base64 PCM data or URL
   imageUrl: string;
   createdAt: number;
+  mode: BroadcastMode;
+}
+
+export enum BroadcastMode {
+  CREATIVE = 'CREATIVE',
+  MANUAL = 'MANUAL'
 }
 
 export enum RadioState {

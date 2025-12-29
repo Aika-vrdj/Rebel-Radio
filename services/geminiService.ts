@@ -1,37 +1,73 @@
 
 import { GoogleGenAI, Modality, Type } from "@google/genai";
-import { Broadcast } from "../types";
+import { Broadcast, BroadcastMode } from "../types";
 
 // Initialize the API client with strict adherence to instructions
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
-export const generateBroadcastData = async (prompt: string): Promise<Partial<Broadcast>> => {
-  // 1. Generate Broadcast Concept & Script
-  const conceptResponse = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: `You are the creative director for Rebel Radio, an underground cyberpunk station.
-    The user wants music/atmosphere based on: "${prompt}".
-    Generate a JSON object with:
-    - title: A gritty, evocative cyberpunk title.
-    - hostScript: A short radio host introduction (max 120 characters) describing the sound.
-    - visualPrompt: A prompt for a digital art generator showing this sound's vibe.`,
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          title: { type: Type.STRING },
-          hostScript: { type: Type.STRING },
-          visualPrompt: { type: Type.STRING },
-        },
-        required: ['title', 'hostScript', 'visualPrompt']
+export const generateBroadcastData = async (
+  prompt: string, 
+  mode: BroadcastMode
+): Promise<Partial<Broadcast>> => {
+  let title: string;
+  let ttsText: string;
+  let visualPrompt: string;
+
+  if (mode === BroadcastMode.CREATIVE) {
+    // 1. Generate Broadcast Concept & Script (Creative Mode)
+    const conceptResponse = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `You are the creative director for Rebel Radio, an underground cyberpunk station.
+      The user wants music/atmosphere based on: "${prompt}".
+      Generate a JSON object with:
+      - title: A gritty, evocative cyberpunk title.
+      - hostScript: A short radio host introduction (max 120 characters) describing the sound.
+      - visualPrompt: A prompt for a digital art generator showing this sound's vibe.`,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            hostScript: { type: Type.STRING },
+            visualPrompt: { type: Type.STRING },
+          },
+          required: ['title', 'hostScript', 'visualPrompt']
+        }
       }
-    }
-  });
+    });
 
-  const { title, hostScript, visualPrompt } = JSON.parse(conceptResponse.text || '{}');
+    const parsed = JSON.parse(conceptResponse.text || '{}');
+    title = parsed.title;
+    ttsText = `Broadcasting from the underground... Rebel Radio is live. Tonight's signal: ${parsed.hostScript}`;
+    visualPrompt = parsed.visualPrompt;
+  } else {
+    // 1. Generate Metadata only (Manual Mode)
+    // We still want a cool title and image for the archive, but the script is literal.
+    const metaResponse = await ai.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: `Generate a cool cyberpunk radio title and a visual art prompt for this literal radio message: "${prompt}". 
+      Return JSON: { "title": string, "visualPrompt": string }`,
+      config: {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            title: { type: Type.STRING },
+            visualPrompt: { type: Type.STRING },
+          },
+          required: ['title', 'visualPrompt']
+        }
+      }
+    });
+    
+    const parsedMeta = JSON.parse(metaResponse.text || '{}');
+    title = parsedMeta.title;
+    visualPrompt = parsedMeta.visualPrompt;
+    ttsText = prompt; // The manual text is exactly what the user entered
+  }
 
-  // 2. Generate Cover Art
+  // 2. Generate Cover Art (Common for both)
   const imageResponse = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: {
@@ -50,20 +86,21 @@ export const generateBroadcastData = async (prompt: string): Promise<Partial<Bro
     }
   }
 
-  // 3. Generate Audio Stream using the supported TTS model
-  // We use 'Kore' for the consistent female voice the user requested.
+  // 3. Generate Audio Stream (Common voice: Kore)
   const audioResponse = await ai.models.generateContent({
     model: 'gemini-2.5-flash-preview-tts',
     contents: [{ 
       parts: [{ 
-        text: `Say with a cool, sophisticated, and slightly gritty rebel commander tone: Broadcasting from the underground... Rebel Radio is live. Tonight's signal: ${hostScript}` 
+        text: mode === BroadcastMode.CREATIVE 
+          ? `Say with a cool, sophisticated rebel tone: ${ttsText}`
+          : ttsText // In manual mode, we deliver the text strictly
       }] 
     }],
     config: {
       responseModalities: [Modality.AUDIO],
       speechConfig: {
         voiceConfig: {
-          prebuiltVoiceConfig: { voiceName: 'Kore' } // Melodic female voice for consistency
+          prebuiltVoiceConfig: { voiceName: 'Kore' }
         }
       }
     }
@@ -73,10 +110,11 @@ export const generateBroadcastData = async (prompt: string): Promise<Partial<Bro
 
   return {
     title,
-    script: hostScript,
+    script: ttsText,
     audioData,
     imageUrl,
     prompt,
+    mode,
     createdAt: Date.now()
   };
 };
@@ -109,32 +147,26 @@ export const decodeAudioDataToBuffer = async (
   return buffer;
 };
 
-/**
- * Creates a WAV file Blob from raw PCM data.
- */
 export const createWavBlob = (base64Pcm: string, sampleRate: number = 24000): Blob => {
   const pcmData = decodeBase64(base64Pcm);
   const length = pcmData.byteLength;
   const wavHeader = new ArrayBuffer(44);
   const view = new DataView(wavHeader);
 
-  // RIFF identifier
-  view.setUint32(0, 0x52494646, false); // "RIFF"
+  view.setUint32(0, 0x52494646, false); 
   view.setUint32(4, 36 + length, true);
-  view.setUint32(8, 0x57415645, false); // "WAVE"
+  view.setUint32(8, 0x57415645, false); 
   
-  // fmt chunk
-  view.setUint32(12, 0x666d7420, false); // "fmt "
+  view.setUint32(12, 0x666d7420, false); 
   view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true); // PCM format
-  view.setUint16(22, 1, true); // Mono
+  view.setUint16(20, 1, true); 
+  view.setUint16(22, 1, true); 
   view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true); // byte rate
-  view.setUint16(32, 2, true); // block align
-  view.setUint16(34, 16, true); // bits per sample
+  view.setUint32(28, sampleRate * 2, true); 
+  view.setUint16(32, 2, true); 
+  view.setUint16(34, 16, true); 
   
-  // data chunk
-  view.setUint32(36, 0x64617461, false); // "data"
+  view.setUint32(36, 0x64617461, false); 
   view.setUint32(40, length, true);
 
   return new Blob([wavHeader, pcmData.buffer], { type: 'audio/wav' });
