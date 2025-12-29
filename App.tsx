@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import * as gemini from './services/geminiService';
-import * as db from './services/supabaseService';
-import { Broadcast, RadioState, BroadcastMode } from './types';
-import AudioVisualizer from './components/AudioVisualizer';
-import BroadcastCard from './components/BroadcastCard';
-import ObserverView from './components/ObserverView';
+import * as gemini from './services/geminiService.ts';
+import * as db from './services/supabaseService.ts';
+import { Broadcast, RadioState, BroadcastMode } from './types.ts';
+import AudioVisualizer from './components/AudioVisualizer.tsx';
+import BroadcastCard from './components/BroadcastCard.tsx';
+import ObserverView from './components/ObserverView.tsx';
 
 const App: React.FC = () => {
   const [isObserver, setIsObserver] = useState(false);
@@ -24,33 +24,6 @@ const App: React.FC = () => {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
 
-  useEffect(() => {
-    // Check for both query params and hash for maximum compatibility
-    const checkRouting = () => {
-      const params = new URLSearchParams(window.location.search);
-      const isObs = params.get('view') === 'observer' || window.location.hash === '#/observer';
-      setIsObserver(isObs);
-      
-      if (!isObs) {
-        refreshAppData();
-      } else {
-        setIsLoading(false);
-      }
-    };
-
-    checkRouting();
-    window.addEventListener('hashchange', checkRouting);
-    
-    const interval = setInterval(() => {
-      if (!isObserver) refreshAppData();
-    }, 30000);
-    
-    return () => {
-      window.removeEventListener('hashchange', checkRouting);
-      clearInterval(interval);
-    };
-  }, [isObserver]);
-
   const refreshAppData = async () => {
     try {
       const history = await db.getBroadcasts();
@@ -64,6 +37,20 @@ const App: React.FC = () => {
       setIsLoading(false);
     }
   };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const isObs = params.get('view') === 'observer' || window.location.hash === '#/observer';
+    setIsObserver(isObs);
+    
+    if (isObs) {
+      setIsLoading(false);
+    } else {
+      refreshAppData();
+      const interval = setInterval(refreshAppData, 30000);
+      return () => clearInterval(interval);
+    }
+  }, []);
 
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
@@ -98,13 +85,7 @@ const App: React.FC = () => {
       setGenerationStep('SIGNAL TRANSMITTED');
       setRadioState(RadioState.IDLE);
       
-      const history = await db.getBroadcasts();
-      setBroadcasts(history);
-      
-      const updatedQuota = await db.getQuota();
-      setQuota(updatedQuota);
-      setCloudStatus(db.getCloudStatus());
-      
+      await refreshAppData();
       setPrompt('');
       setActiveBroadcast(newBroadcast);
 

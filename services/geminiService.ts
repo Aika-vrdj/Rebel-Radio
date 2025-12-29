@@ -1,9 +1,9 @@
 
 import { GoogleGenAI, Modality, Type } from "@google/genai";
-import { Broadcast, BroadcastMode } from "../types";
+import { Broadcast, BroadcastMode } from "../types.ts";
 
-// Initialize the API client with strict adherence to instructions
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+// Strict adherence to instructions
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const generateBroadcastData = async (
   prompt: string, 
@@ -14,7 +14,6 @@ export const generateBroadcastData = async (
   let visualPrompt: string;
 
   if (mode === BroadcastMode.CREATIVE) {
-    // 1. Generate Broadcast Concept & Script (Creative Mode)
     const conceptResponse = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: `You are the creative director for Rebel Radio, an underground cyberpunk station.
@@ -42,8 +41,6 @@ export const generateBroadcastData = async (
     ttsText = `Broadcasting from the underground... Rebel Radio is live. Tonight's signal: ${parsed.hostScript}`;
     visualPrompt = parsed.visualPrompt;
   } else {
-    // 1. Generate Metadata only (Manual Mode)
-    // We still want a cool title and image for the archive, but the script is literal.
     const metaResponse = await ai.models.generateContent({
       model: 'gemini-3-flash-preview',
       contents: `Generate a cool cyberpunk radio title and a visual art prompt for this literal radio message: "${prompt}". 
@@ -64,10 +61,9 @@ export const generateBroadcastData = async (
     const parsedMeta = JSON.parse(metaResponse.text || '{}');
     title = parsedMeta.title;
     visualPrompt = parsedMeta.visualPrompt;
-    ttsText = prompt; // The manual text is exactly what the user entered
+    ttsText = prompt;
   }
 
-  // 2. Generate Cover Art (Common for both)
   const imageResponse = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: {
@@ -86,14 +82,13 @@ export const generateBroadcastData = async (
     }
   }
 
-  // 3. Generate Audio Stream (Common voice: Kore)
   const audioResponse = await ai.models.generateContent({
     model: 'gemini-2.5-flash-preview-tts',
     contents: [{ 
       parts: [{ 
         text: mode === BroadcastMode.CREATIVE 
           ? `Say with a cool, sophisticated rebel tone: ${ttsText}`
-          : ttsText // In manual mode, we deliver the text strictly
+          : ttsText
       }] 
     }],
     config: {

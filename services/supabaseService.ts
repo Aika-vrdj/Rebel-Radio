@@ -1,6 +1,6 @@
 
 import { createClient, RealtimeChannel } from 'https://esm.sh/@supabase/supabase-js@2.45.1';
-import { Broadcast, BroadcastMode } from "../types";
+import { Broadcast, BroadcastMode } from "../types.ts";
 
 const supabaseUrl = 'https://cxgcwtsrzktbmmkcmndg.supabase.co';
 const supabaseAnonKey = 'sb_publishable_T24vegMuC2ep_aW4VQH98g_CUcgUI6L';
@@ -73,7 +73,7 @@ export const saveBroadcast = async (broadcast: Broadcast): Promise<void> => {
         .insert([{
           client_id: clientId,
           content: broadcast.script,
-          audio_base_64: broadcast.audioData, // Matches your column names
+          audio_base_64: broadcast.audioData,
           mode: broadcast.mode.toLowerCase()
         }]);
 

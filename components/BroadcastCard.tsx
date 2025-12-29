@@ -1,7 +1,7 @@
 
 import React from 'react';
-import { Broadcast, BroadcastMode } from '../types';
-import * as gemini from '../services/geminiService';
+import { Broadcast, BroadcastMode } from '../types.ts';
+import * as gemini from '../services/geminiService.ts';
 
 interface BroadcastCardProps {
   broadcast: Broadcast;
@@ -15,7 +15,7 @@ const BroadcastCard: React.FC<BroadcastCardProps> = ({ broadcast, onPlay }) => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `rebel_radio_${broadcast.title.toLowerCase().replace(/\s+/g, '_')}_signal.wav`;
+    a.download = `rebel_radio_${broadcast.id}.wav`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);

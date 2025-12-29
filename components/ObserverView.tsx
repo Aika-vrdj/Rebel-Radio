@@ -1,9 +1,9 @@
 
 import React, { useEffect, useState, useRef } from 'react';
-import * as db from '../services/supabaseService';
-import * as gemini from '../services/geminiService';
-import { Broadcast, RadioState } from '../types';
-import AudioVisualizer from './AudioVisualizer';
+import * as db from '../services/supabaseService.ts';
+import * as gemini from '../services/geminiService.ts';
+import { Broadcast, RadioState } from '../types.ts';
+import AudioVisualizer from './AudioVisualizer.tsx';
 
 const ObserverView: React.FC = () => {
   const [isReady, setIsReady] = useState(false);

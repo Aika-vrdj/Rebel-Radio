@@ -1,7 +1,9 @@
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
+import App from './App.tsx';
+
+console.log("Rebel Radio: Mounting Application...");
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
