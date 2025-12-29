@@ -82,6 +82,15 @@
   }
 }
 </script>
+<script type="module">
+  import React from 'react';
+  import { createRoot } from 'react-dom';
+  import App from './App.tsx'; // Asegúrate de que la ruta sea correcta
+
+  const container = document.getElementById('root');
+  const root = createRoot(container);
+  root.render(React.createElement(App));
+</script>
 </head>
 <body>
     <div id="root"></div>
