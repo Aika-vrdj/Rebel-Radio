@@ -1,0 +1,7 @@
+{
+  "name": "Rebel Radio",
+  "description": "A cyberpunk AI radio station that generates futuristic broadcasts and music descriptions using Gemini.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
