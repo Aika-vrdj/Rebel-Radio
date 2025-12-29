@@ -55,6 +55,7 @@ const App: React.FC = () => {
     setGenerationStep('TUNING ENCRYPTION...');
     
     try {
+      // 1. Generate Broadcast Data
       const data = await gemini.generateBroadcastData(prompt, mode);
       
       const newBroadcast: Broadcast = {
@@ -62,26 +63,42 @@ const App: React.FC = () => {
         title: data.title || 'Unknown Signal',
         prompt: data.prompt || prompt,
         script: data.script || '',
-        audioData: data.audioData || '',
+        audioData: data.audioData || '', // Base64 string
         imageUrl: data.imageUrl || '',
         mode: mode,
         createdAt: data.createdAt || Date.now()
       };
 
-      setGenerationStep('UPLOADING TO CLOUD...');
+      // 2. Insert into Database (New Schema)
+      setGenerationStep('TRANSMITTING...');
       await db.saveBroadcast(newBroadcast);
       
-      setBroadcasts(prev => [newBroadcast, ...prev].slice(0, 30));
+      // 3. UI Update (Success)
+      setGenerationStep('SIGNAL TRANSMITTED');
+      setRadioState(RadioState.IDLE);
+      
+      // Refresh to show latest
+      const history = await db.getBroadcasts();
+      setBroadcasts(history);
+      
       const updatedQuota = await db.getQuota();
       setQuota(updatedQuota);
       setCloudStatus(db.getCloudStatus());
       
       setPrompt('');
-      playBroadcast(newBroadcast);
+      setActiveBroadcast(newBroadcast);
+
+      // IMPORTANT: No auto-play. Signal is sent to cloud for OBS.
+      
+      // Clear status message after delay
+      setTimeout(() => {
+        setGenerationStep(prev => prev === 'SIGNAL TRANSMITTED' ? '' : prev);
+      }, 5000);
+
     } catch (error) {
       console.error('Failed to generate broadcast:', error);
       setRadioState(RadioState.ERROR);
-      setGenerationStep('SIGNAL JAMMED - RETRY LATER');
+      setGenerationStep('SIGNAL JAMMED');
     }
   };
 
@@ -118,6 +135,7 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("Playback error:", e);
       setRadioState(RadioState.ERROR);
+      setGenerationStep('PLAYBACK FAILED');
     }
   };
 
@@ -127,7 +145,7 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `rebel_radio_${activeBroadcast.title.toLowerCase().replace(/\s+/g, '_')}_signal.wav`;
+    a.download = `rebel_radio_signal_${activeBroadcast.id}.wav`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -179,9 +197,15 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {cloudStatus === 'schema_error' && (
-        <div className="w-full bg-yellow-500/10 border border-yellow-500/50 p-2 mb-6 rounded text-center text-[10px] text-yellow-500 uppercase tracking-widest font-bold animate-pulse">
-          DATABASE SCHEMA RECOGNITION FAILED. RUN THE SQL SETUP IN SUPABASE.
+      {generationStep === 'SIGNAL TRANSMITTED' && (
+        <div className="w-full bg-green-500/10 border border-green-500/50 p-2 mb-6 rounded text-center text-[10px] text-green-400 uppercase tracking-widest font-bold animate-pulse shadow-[0_0_15px_rgba(34,197,94,0.2)]">
+          SUCCESS: SIGNAL TRANSMITTED TO BROADCAST SERVER
+        </div>
+      )}
+
+      {radioState === RadioState.ERROR && (
+        <div className="w-full bg-red-500/10 border border-red-500/50 p-2 mb-6 rounded text-center text-[10px] text-red-500 uppercase tracking-widest font-bold animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+          ERROR: {generationStep || 'SIGNAL JAMMED'}
         </div>
       )}
 
@@ -191,7 +215,7 @@ const App: React.FC = () => {
             <div className="absolute top-0 right-0 p-2">
                <div className="flex gap-1">
                  {[1,2,3,4,5].map(i => (
-                   <div key={i} className={`w-1 h-3 ${radioState === RadioState.PLAYING ? 'bg-cyan-400' : 'bg-slate-800'}`} />
+                   <div key={i} className={`w-1 h-3 ${radioState === RadioState.PLAYING ? 'bg-cyan-400 animate-pulse' : 'bg-slate-800'}`} />
                  ))}
                </div>
             </div>
@@ -201,7 +225,7 @@ const App: React.FC = () => {
                 <div className="flex flex-col">
                   <span className="text-[10px] text-pink-500 uppercase font-bold tracking-widest">Signal State</span>
                   <span className={`text-xl font-bold tracking-tight ${radioState === RadioState.PLAYING ? 'text-green-400' : 'text-cyan-400'}`}>
-                    {radioState === RadioState.GENERATING ? generationStep : radioState === RadioState.PLAYING ? 'LIVE TRANSMISSION' : 'FREQ: 101.X IDLE'}
+                    {radioState === RadioState.GENERATING ? generationStep : radioState === RadioState.PLAYING ? 'LIVE TRANSMISSION' : generationStep || 'FREQ: 101.X IDLE'}
                   </span>
                 </div>
                 <div className="text-right">
@@ -216,7 +240,7 @@ const App: React.FC = () => {
                 <div className="w-full md:w-40 h-40 border border-cyan-500/30 rounded overflow-hidden flex-shrink-0 relative group">
                   {activeBroadcast ? (
                     <>
-                      <img src={activeBroadcast.imageUrl} className="w-full h-full object-cover" alt="Cover" />
+                      <img src={activeBroadcast.imageUrl || `https://api.dicebear.com/7.x/identicon/svg?seed=${activeBroadcast.id}`} className="w-full h-full object-cover" alt="Cover" />
                       <div className="absolute inset-0 bg-gradient-to-t from-black/80 to-transparent" />
                     </>
                   ) : (
@@ -228,14 +252,16 @@ const App: React.FC = () => {
                 </div>
                 <div className="flex-1 flex flex-col justify-center min-w-0">
                   <div className="flex items-center justify-between">
-                    <div className="inline-block px-2 py-0.5 bg-pink-500/20 text-pink-500 text-[8px] font-bold rounded mb-1 w-fit tracking-widest uppercase">Now Airing</div>
+                    <div className="inline-block px-2 py-0.5 bg-pink-500/20 text-pink-500 text-[8px] font-bold rounded mb-1 w-fit tracking-widest uppercase">
+                      {radioState === RadioState.PLAYING ? 'Playing' : 'Latest Signal'}
+                    </div>
                     {activeBroadcast && (
                       <button 
                         onClick={downloadActiveSignal}
                         className="flex items-center gap-2 text-[10px] text-cyan-400 hover:text-white transition-colors uppercase font-bold tracking-tighter"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        Extract Signal
+                        Extract
                       </button>
                     )}
                   </div>
@@ -243,7 +269,7 @@ const App: React.FC = () => {
                     {activeBroadcast?.title || 'System Standby'}
                   </h2>
                   <p className="text-slate-400 text-sm italic mt-1 overflow-hidden line-clamp-3 font-mono leading-snug">
-                    {activeBroadcast?.script || 'Awaiting rebel input. Choose a mode and initiate waveform synthesis.'}
+                    {activeBroadcast?.script || 'Awaiting rebel input. Transmitted signals are routed to the cloud for live broadcast.'}
                   </p>
                 </div>
               </div>
@@ -258,14 +284,14 @@ const App: React.FC = () => {
                   className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-[10px] font-bold transition-all uppercase tracking-widest ${mode === BroadcastMode.CREATIVE ? 'bg-cyan-500/20 text-cyan-400 neon-border' : 'text-slate-600 hover:text-slate-400'}`}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 4.44-2.04Z"/></svg>
-                  Brain-Link
+                  Creative
                 </button>
                 <button 
                   onClick={() => setMode(BroadcastMode.MANUAL)}
                   className={`flex items-center gap-2 px-4 py-1.5 rounded-md text-[10px] font-bold transition-all uppercase tracking-widest ${mode === BroadcastMode.MANUAL ? 'bg-pink-500/20 text-pink-500 pink-neon-border' : 'text-slate-600 hover:text-slate-400'}`}
                 >
                   <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="12" y2="5"/></svg>
-                  Raw-Data
+                  Manual
                 </button>
               </div>
 
@@ -275,7 +301,7 @@ const App: React.FC = () => {
                   {[...Array(5)].map((_, i) => (
                     <div 
                       key={i} 
-                      className={`w-3 h-1.5 rounded-sm ${i < quota.count ? 'bg-slate-700' : 'bg-pink-500 animate-pulse'}`}
+                      className={`w-3 h-1.5 rounded-sm ${i < quota.count ? 'bg-slate-700 shadow-inner' : 'bg-pink-500 animate-pulse shadow-[0_0_5px_rgba(236,72,153,0.5)]'}`}
                     />
                   ))}
                 </div>
@@ -290,16 +316,16 @@ const App: React.FC = () => {
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 disabled={isQuotaExhausted}
-                placeholder={isQuotaExhausted ? "ENCRYPTION LIMIT REACHED. WAIT FOR SIGNAL REGEN." : mode === BroadcastMode.CREATIVE ? "PROMPT: Describe a vibe, atmosphere, or feeling..." : "TERMINAL: Enter the literal text for Kore to broadcast..."}
+                placeholder={isQuotaExhausted ? "ENCRYPTION LIMIT REACHED. WAIT FOR SIGNAL REGEN." : mode === BroadcastMode.CREATIVE ? "PROMPT: Describe the sound vibe..." : "TERMINAL: Enter literal broadcast script..."}
                 className={`bg-black/80 border rounded-lg p-4 font-mono text-sm transition-all min-h-[100px] resize-none focus:outline-none focus:ring-1 ${isQuotaExhausted ? 'border-slate-800 text-slate-700 cursor-not-allowed' : mode === BroadcastMode.CREATIVE ? 'border-cyan-500/30 text-cyan-400 placeholder-cyan-900/40 focus:border-cyan-500 focus:ring-cyan-500' : 'border-pink-500/30 text-pink-400 placeholder-pink-900/40 focus:border-pink-500 focus:ring-pink-500'}`}
               />
               <button 
                 onClick={handleGenerate}
                 disabled={radioState === RadioState.GENERATING || !prompt.trim() || isQuotaExhausted}
-                className={`group relative font-bold py-4 rounded-lg uppercase tracking-[0.2em] transition-all overflow-hidden ${mode === BroadcastMode.CREATIVE ? 'bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-900' : 'bg-pink-600 hover:bg-pink-500 disabled:bg-slate-900'} text-white`}
+                className={`group relative font-bold py-4 rounded-lg uppercase tracking-[0.2em] transition-all overflow-hidden ${mode === BroadcastMode.CREATIVE ? 'bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-900' : 'bg-pink-600 hover:bg-pink-500 disabled:bg-slate-900'} text-white shadow-lg`}
               >
                 <span className="relative z-10">
-                  {isQuotaExhausted ? 'QUOTA DEPLETED' : radioState === RadioState.GENERATING ? generationStep : mode === BroadcastMode.CREATIVE ? 'INITIATE BRAIN-LINK' : 'STREAM RAW-DATA'}
+                  {isQuotaExhausted ? 'QUOTA DEPLETED' : radioState === RadioState.GENERATING ? generationStep : 'TRANSMIT SIGNAL'}
                 </span>
                 {!isQuotaExhausted && (
                   <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
@@ -312,15 +338,15 @@ const App: React.FC = () => {
         <div className="lg:col-span-5 flex flex-col h-[calc(100vh-280px)] min-h-[450px]">
           <div className="flex items-center justify-between mb-4 px-2">
             <h2 className="text-cyan-400 uppercase font-bold text-[10px] tracking-[0.3em]">
-              {cloudStatus === 'connected' ? 'Cloud Archives' : 'Local Node Archives'}
+              Node Archive
             </h2>
-            <span className="text-cyan-900 text-[8px] font-mono uppercase">Nodes: {broadcasts.length}</span>
+            <span className="text-cyan-900 text-[8px] font-mono uppercase">Total Transmissions: {broadcasts.length}</span>
           </div>
           <div className="flex-1 overflow-y-auto pr-2 space-y-4 scroll-smooth custom-scrollbar">
             {broadcasts.length === 0 ? (
               <div className="text-cyan-900/40 p-12 text-center italic border border-dashed border-cyan-900/30 rounded-xl flex flex-col items-center gap-3">
                 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="opacity-20"><path d="M12 20v-8m0 0V4m0 8h8m-8 0H4"/></svg>
-                <span className="text-[10px] tracking-widest uppercase">The airwaves are silent.</span>
+                <span className="text-[10px] tracking-widest uppercase">No active signals found.</span>
               </div>
             ) : (
               broadcasts.map(b => (
@@ -332,12 +358,12 @@ const App: React.FC = () => {
       </div>
 
       <footer className="w-full mt-auto pt-8 pb-4 border-t border-cyan-900/20 flex flex-col md:flex-row justify-between items-center text-cyan-900 text-[8px] tracking-[0.3em] uppercase font-bold gap-4">
-        <div>© 2077 Night City Archives</div>
+        <div>© 2077 Rebel Radio Underground</div>
         <div className="flex gap-4">
-            <span className={cloudStatus === 'connected' ? 'text-green-500/50' : ''}>SYNC_MODE: {cloudStatus.toUpperCase()}</span>
+            <span className={cloudStatus === 'connected' ? 'text-green-500/50' : ''}>LINK: {cloudStatus.toUpperCase()}</span>
             <span>FREQ: 101.9 MHz</span>
         </div>
-        <div>Signal Status: Nominal</div>
+        <div>Transmitter: Nominal</div>
       </footer>
     </div>
   );
