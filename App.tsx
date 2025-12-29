@@ -15,7 +15,7 @@ const App: React.FC = () => {
   const [generationStep, setGenerationStep] = useState('');
   const [quota, setQuota] = useState<db.QuotaData>({ count: 0, resetAt: 0 });
   const [isLoading, setIsLoading] = useState(true);
-  const [schemaValid, setSchemaValid] = useState(true);
+  const [cloudStatus, setCloudStatus] = useState<'offline' | 'schema_error' | 'connected' | 'connecting'>('connecting');
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -27,9 +27,9 @@ const App: React.FC = () => {
       setBroadcasts(history);
       const quotaData = await db.getQuota();
       setQuota(quotaData);
-      setSchemaValid(db.isSchemaValid());
+      setCloudStatus(db.getCloudStatus());
     } catch (e) {
-      console.error("Initialization Error:", e);
+      console.error("Refresh Error:", e);
     } finally {
       setIsLoading(false);
     }
@@ -37,7 +37,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     refreshAppData();
-    const interval = setInterval(refreshAppData, 60000);
+    const interval = setInterval(refreshAppData, 30000);
     return () => clearInterval(interval);
   }, []);
 
@@ -55,9 +55,6 @@ const App: React.FC = () => {
     setGenerationStep('TUNING ENCRYPTION...');
     
     try {
-      setTimeout(() => setGenerationStep(mode === BroadcastMode.CREATIVE ? 'BRAIN-LINK SYNC...' : 'RAW-STREAM PACKETIZING...'), 1000);
-      setTimeout(() => setGenerationStep('RENDER VISUAL BUFFER...'), 2500);
-
       const data = await gemini.generateBroadcastData(prompt, mode);
       
       const newBroadcast: Broadcast = {
@@ -71,12 +68,13 @@ const App: React.FC = () => {
         createdAt: data.createdAt || Date.now()
       };
 
+      setGenerationStep('UPLOADING TO CLOUD...');
       await db.saveBroadcast(newBroadcast);
       
       setBroadcasts(prev => [newBroadcast, ...prev].slice(0, 30));
       const updatedQuota = await db.getQuota();
       setQuota(updatedQuota);
-      setSchemaValid(db.isSchemaValid());
+      setCloudStatus(db.getCloudStatus());
       
       setPrompt('');
       playBroadcast(newBroadcast);
@@ -161,11 +159,13 @@ const App: React.FC = () => {
 
       <header className="w-full mb-8 text-center relative">
         <div className="absolute top-0 right-0 text-[10px] font-mono hidden md:block animate-pulse text-right">
-          <span className={schemaValid ? "text-pink-500" : "text-yellow-500"}>
-            STORAGE: {schemaValid ? 'SUPABASE_CLOUD' : 'SCHEMA_MISSING_FALLBACK'}
-          </span> <br/>
+          <div className="flex items-center justify-end gap-2 mb-1">
+             <span className="text-slate-500">CLOUD_SYNC:</span>
+             <div className={`w-2 h-2 rounded-full ${cloudStatus === 'connected' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]' : cloudStatus === 'schema_error' ? 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.8)]' : 'bg-red-500 animate-ping'}`} />
+          </div>
+          <span className="text-pink-500 uppercase">{cloudStatus === 'connected' ? 'SUPABASE_ACTIVE' : cloudStatus === 'schema_error' ? 'LOCAL_FALLBACK' : 'OFFLINE'}</span> <br/>
           <span className="text-pink-500">VOICE-LINK: KORE-ACTIVE</span> <br/>
-          <span className="text-pink-500">QUOTA-LIMIT: 5/24H</span>
+          <span className="text-pink-500">QUOTA: {quota.count}/5</span>
         </div>
         <h1 className="text-4xl md:text-7xl font-black italic orbitron neon-text tracking-tighter mb-2">
           REBEL <span className="text-pink-500 pink-neon-text">RADIO</span>
@@ -179,9 +179,9 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {!schemaValid && (
+      {cloudStatus === 'schema_error' && (
         <div className="w-full bg-yellow-500/10 border border-yellow-500/50 p-2 mb-6 rounded text-center text-[10px] text-yellow-500 uppercase tracking-widest font-bold animate-pulse">
-          WARNING: Supabase tables 'broadcasts' & 'quotas' not found. App is running in Local Fallback mode.
+          DATABASE SCHEMA RECOGNITION FAILED. RUN THE SQL SETUP IN SUPABASE.
         </div>
       )}
 
@@ -280,7 +280,7 @@ const App: React.FC = () => {
                   ))}
                 </div>
                 {isQuotaExhausted && (
-                  <span className="text-[9px] text-pink-500/60 font-mono ml-2">RESET: {getTimeRemaining()}</span>
+                  <span className="text-[9px] text-pink-500/60 font-mono ml-2 uppercase">RESET: {getTimeRemaining()}</span>
                 )}
               </div>
             </div>
@@ -299,7 +299,7 @@ const App: React.FC = () => {
                 className={`group relative font-bold py-4 rounded-lg uppercase tracking-[0.2em] transition-all overflow-hidden ${mode === BroadcastMode.CREATIVE ? 'bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-900' : 'bg-pink-600 hover:bg-pink-500 disabled:bg-slate-900'} text-white`}
               >
                 <span className="relative z-10">
-                  {isQuotaExhausted ? 'QUOTA DEPLETED' : radioState === RadioState.GENERATING ? 'TRANSMITTING...' : mode === BroadcastMode.CREATIVE ? 'INITIATE BRAIN-LINK' : 'STREAM RAW-DATA'}
+                  {isQuotaExhausted ? 'QUOTA DEPLETED' : radioState === RadioState.GENERATING ? generationStep : mode === BroadcastMode.CREATIVE ? 'INITIATE BRAIN-LINK' : 'STREAM RAW-DATA'}
                 </span>
                 {!isQuotaExhausted && (
                   <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
@@ -311,14 +311,16 @@ const App: React.FC = () => {
 
         <div className="lg:col-span-5 flex flex-col h-[calc(100vh-280px)] min-h-[450px]">
           <div className="flex items-center justify-between mb-4 px-2">
-            <h2 className="text-cyan-400 uppercase font-bold text-[10px] tracking-[0.3em]">Archives</h2>
-            <span className="text-cyan-900 text-[8px] font-mono uppercase">Node Signal Count: {broadcasts.length}</span>
+            <h2 className="text-cyan-400 uppercase font-bold text-[10px] tracking-[0.3em]">
+              {cloudStatus === 'connected' ? 'Cloud Archives' : 'Local Node Archives'}
+            </h2>
+            <span className="text-cyan-900 text-[8px] font-mono uppercase">Nodes: {broadcasts.length}</span>
           </div>
           <div className="flex-1 overflow-y-auto pr-2 space-y-4 scroll-smooth custom-scrollbar">
             {broadcasts.length === 0 ? (
               <div className="text-cyan-900/40 p-12 text-center italic border border-dashed border-cyan-900/30 rounded-xl flex flex-col items-center gap-3">
                 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="opacity-20"><path d="M12 20v-8m0 0V4m0 8h8m-8 0H4"/></svg>
-                <span className="text-[10px] tracking-widest uppercase">The airwaves are silent. Generate a signal.</span>
+                <span className="text-[10px] tracking-widest uppercase">The airwaves are silent.</span>
               </div>
             ) : (
               broadcasts.map(b => (
@@ -332,8 +334,8 @@ const App: React.FC = () => {
       <footer className="w-full mt-auto pt-8 pb-4 border-t border-cyan-900/20 flex flex-col md:flex-row justify-between items-center text-cyan-900 text-[8px] tracking-[0.3em] uppercase font-bold gap-4">
         <div>© 2077 Night City Archives</div>
         <div className="flex gap-4">
-            <span>Lat: 37.7749</span>
-            <span>Long: -122.4194</span>
+            <span className={cloudStatus === 'connected' ? 'text-green-500/50' : ''}>SYNC_MODE: {cloudStatus.toUpperCase()}</span>
+            <span>FREQ: 101.9 MHz</span>
         </div>
         <div>Signal Status: Nominal</div>
       </footer>

@@ -2,36 +2,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.1';
 import { Broadcast } from "../types";
 
-/**
- * SQL SCHEMA FOR SUPABASE (Run this in your Supabase SQL Editor):
- * 
- * create table broadcasts (
- *   id text primary key,
- *   title text,
- *   prompt text,
- *   script text,
- *   audioData text,
- *   imageUrl text,
- *   mode text,
- *   createdAt int8
- * );
- * 
- * create table quotas (
- *   id text primary key,
- *   count int4,
- *   resetAt int8
- * );
- * 
- * -- Enable RLS or disable for testing
- * alter table broadcasts enable row level security;
- * create policy "Public Access" on broadcasts for select using (true);
- * create policy "Public Insert" on broadcasts for insert with check (true);
- * 
- * alter table quotas enable row level security;
- * create policy "Public Access" on quotas for select using (true);
- * create policy "Public Upsert" on quotas for upsert with check (true);
- */
-
 const supabaseUrl = 'https://cxgcwtsrzktbmmkcmndg.supabase.co';
 const supabaseAnonKey = 'sb_publishable_T24vegMuC2ep_aW4VQH98g_CUcgUI6L';
 
@@ -41,8 +11,8 @@ const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseAnonKe
 const LOCAL_STORAGE_KEY = 'rebel_radio_broadcasts_fallback';
 const LOCAL_QUOTA_KEY = 'rebel_radio_quota_fallback';
 
-// Track if we've detected a missing schema to avoid repeated failed calls
 let schemaErrorDetected = false;
+let lastCallSuccessful = false;
 
 export interface QuotaData {
   count: number;
@@ -58,7 +28,12 @@ const getClientId = () => {
   return id;
 };
 
-export const isSchemaValid = () => !schemaErrorDetected;
+export const getCloudStatus = () => {
+  if (!supabase) return 'offline';
+  if (schemaErrorDetected) return 'schema_error';
+  if (lastCallSuccessful) return 'connected';
+  return 'connecting';
+};
 
 export const saveBroadcast = async (broadcast: Broadcast): Promise<void> => {
   if (supabase && !schemaErrorDetected) {
@@ -78,19 +53,18 @@ export const saveBroadcast = async (broadcast: Broadcast): Promise<void> => {
 
       if (broadcastError) {
         if (broadcastError.code === 'PGRST205') schemaErrorDetected = true;
-        console.error("Supabase Save Error:", broadcastError.message);
         throw broadcastError;
       }
 
       const quota = await getQuota();
       const clientId = getClientId();
-      const { error: quotaError } = await supabase
+      await supabase
         .from('quotas')
         .upsert({ id: clientId, count: quota.count + 1, resetAt: quota.resetAt });
-
-      if (quotaError) console.error("Quota Update Error:", quotaError.message);
+      
+      lastCallSuccessful = true;
     } catch (e) {
-      console.warn("Switching to local storage due to cloud error.");
+      console.warn("Cloud save failed, falling back to local storage.");
       saveToLocal(broadcast);
     }
   } else {
@@ -101,7 +75,7 @@ export const saveBroadcast = async (broadcast: Broadcast): Promise<void> => {
 const saveToLocal = (broadcast: Broadcast) => {
   const data = localStorage.getItem(LOCAL_STORAGE_KEY);
   const existing = data ? JSON.parse(data) : [];
-  const updated = [broadcast, ...existing].slice(0, 10);
+  const updated = [broadcast, ...existing].slice(0, 15);
   localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
   
   const qData = localStorage.getItem(LOCAL_QUOTA_KEY);
@@ -119,14 +93,10 @@ export const getBroadcasts = async (): Promise<Broadcast[]> => {
         .limit(30);
 
       if (error) {
-        if (error.code === 'PGRST205') {
-          console.warn("Broadcasts table not found. Falling back to local storage.");
-          schemaErrorDetected = true;
-        } else {
-          console.error("Fetch Error:", error.message);
-        }
+        if (error.code === 'PGRST205') schemaErrorDetected = true;
         return getFromLocal();
       }
+      lastCallSuccessful = true;
       return (data as Broadcast[]) || [];
     } catch (err) {
       return getFromLocal();
@@ -155,9 +125,11 @@ export const getQuota = async (): Promise<QuotaData> => {
 
       if (error) {
         if (error.code === 'PGRST205') schemaErrorDetected = true;
+        // PGRST116 is "No rows found", which is fine for new users
         return { count: 0, resetAt: now + oneDay };
       }
 
+      lastCallSuccessful = true;
       const quota: QuotaData = { count: data.count, resetAt: data.resetAt };
       if (now > quota.resetAt) {
         const refreshed = { count: 0, resetAt: now + oneDay };
