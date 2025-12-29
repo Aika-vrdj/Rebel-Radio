@@ -5,8 +5,10 @@ import * as db from './services/supabaseService';
 import { Broadcast, RadioState, BroadcastMode } from './types';
 import AudioVisualizer from './components/AudioVisualizer';
 import BroadcastCard from './components/BroadcastCard';
+import ObserverView from './components/ObserverView';
 
 const App: React.FC = () => {
+  const [isObserver, setIsObserver] = useState(false);
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
   const [prompt, setPrompt] = useState('');
   const [mode, setMode] = useState<BroadcastMode>(BroadcastMode.CREATIVE);
@@ -16,10 +18,38 @@ const App: React.FC = () => {
   const [quota, setQuota] = useState<db.QuotaData>({ count: 0, resetAt: 0 });
   const [isLoading, setIsLoading] = useState(true);
   const [cloudStatus, setCloudStatus] = useState<'offline' | 'schema_error' | 'connected' | 'connecting'>('connecting');
+  const [copyFeedback, setCopyFeedback] = useState(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const sourceRef = useRef<AudioBufferSourceNode | null>(null);
+
+  useEffect(() => {
+    // Check for both query params and hash for maximum compatibility
+    const checkRouting = () => {
+      const params = new URLSearchParams(window.location.search);
+      const isObs = params.get('view') === 'observer' || window.location.hash === '#/observer';
+      setIsObserver(isObs);
+      
+      if (!isObs) {
+        refreshAppData();
+      } else {
+        setIsLoading(false);
+      }
+    };
+
+    checkRouting();
+    window.addEventListener('hashchange', checkRouting);
+    
+    const interval = setInterval(() => {
+      if (!isObserver) refreshAppData();
+    }, 30000);
+    
+    return () => {
+      window.removeEventListener('hashchange', checkRouting);
+      clearInterval(interval);
+    };
+  }, [isObserver]);
 
   const refreshAppData = async () => {
     try {
@@ -35,12 +65,6 @@ const App: React.FC = () => {
     }
   };
 
-  useEffect(() => {
-    refreshAppData();
-    const interval = setInterval(refreshAppData, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
   const handleGenerate = async () => {
     if (!prompt.trim()) return;
     
@@ -55,7 +79,6 @@ const App: React.FC = () => {
     setGenerationStep('TUNING ENCRYPTION...');
     
     try {
-      // 1. Generate Broadcast Data
       const data = await gemini.generateBroadcastData(prompt, mode);
       
       const newBroadcast: Broadcast = {
@@ -63,21 +86,18 @@ const App: React.FC = () => {
         title: data.title || 'Unknown Signal',
         prompt: data.prompt || prompt,
         script: data.script || '',
-        audioData: data.audioData || '', // Base64 string
+        audioData: data.audioData || '', 
         imageUrl: data.imageUrl || '',
         mode: mode,
         createdAt: data.createdAt || Date.now()
       };
 
-      // 2. Insert into Database (New Schema)
       setGenerationStep('TRANSMITTING...');
       await db.saveBroadcast(newBroadcast);
       
-      // 3. UI Update (Success)
       setGenerationStep('SIGNAL TRANSMITTED');
       setRadioState(RadioState.IDLE);
       
-      // Refresh to show latest
       const history = await db.getBroadcasts();
       setBroadcasts(history);
       
@@ -88,9 +108,6 @@ const App: React.FC = () => {
       setPrompt('');
       setActiveBroadcast(newBroadcast);
 
-      // IMPORTANT: No auto-play. Signal is sent to cloud for OBS.
-      
-      // Clear status message after delay
       setTimeout(() => {
         setGenerationStep(prev => prev === 'SIGNAL TRANSMITTED' ? '' : prev);
       }, 5000);
@@ -135,32 +152,15 @@ const App: React.FC = () => {
     } catch (e) {
       console.error("Playback error:", e);
       setRadioState(RadioState.ERROR);
-      setGenerationStep('PLAYBACK FAILED');
     }
   };
 
-  const downloadActiveSignal = () => {
-    if (!activeBroadcast) return;
-    const blob = gemini.createWavBlob(activeBroadcast.audioData);
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `rebel_radio_signal_${activeBroadcast.id}.wav`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+  const copyObsLink = () => {
+    const link = `${window.location.origin}${window.location.pathname}#/observer`;
+    navigator.clipboard.writeText(link);
+    setCopyFeedback(true);
+    setTimeout(() => setCopyFeedback(false), 2000);
   };
-
-  const getTimeRemaining = () => {
-    const diff = quota.resetAt - Date.now();
-    if (diff <= 0) return "Resetting...";
-    const hours = Math.floor(diff / (1000 * 60 * 60));
-    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-    return `${hours}h ${mins}m`;
-  };
-
-  const isQuotaExhausted = quota.count >= 5;
 
   if (isLoading) {
     return (
@@ -169,6 +169,10 @@ const App: React.FC = () => {
         <div className="animate-pulse tracking-[0.4em] uppercase text-xs">Pinging Night City Nodes...</div>
       </div>
     );
+  }
+
+  if (isObserver) {
+    return <ObserverView />;
   }
 
   return (
@@ -182,8 +186,15 @@ const App: React.FC = () => {
              <div className={`w-2 h-2 rounded-full ${cloudStatus === 'connected' ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.8)]' : cloudStatus === 'schema_error' ? 'bg-yellow-500 shadow-[0_0_8px_rgba(234,179,8,0.8)]' : 'bg-red-500 animate-ping'}`} />
           </div>
           <span className="text-pink-500 uppercase">{cloudStatus === 'connected' ? 'SUPABASE_ACTIVE' : cloudStatus === 'schema_error' ? 'LOCAL_FALLBACK' : 'OFFLINE'}</span> <br/>
-          <span className="text-pink-500">VOICE-LINK: KORE-ACTIVE</span> <br/>
-          <span className="text-pink-500">QUOTA: {quota.count}/5</span>
+          <div className="flex items-center justify-end gap-2 mt-1">
+            <span className="text-cyan-500 font-bold opacity-70">OBS_FEED: READY</span>
+            <button 
+              onClick={copyObsLink}
+              className={`px-2 py-0.5 rounded border ${copyFeedback ? 'border-green-500 text-green-500' : 'border-cyan-500/50 text-cyan-500'} hover:bg-cyan-500/10 transition-all text-[9px] uppercase font-bold`}
+            >
+              {copyFeedback ? 'COPIED' : 'COPY OBS LINK'}
+            </button>
+          </div>
         </div>
         <h1 className="text-4xl md:text-7xl font-black italic orbitron neon-text tracking-tighter mb-2">
           REBEL <span className="text-pink-500 pink-neon-text">RADIO</span>
@@ -199,12 +210,12 @@ const App: React.FC = () => {
 
       {generationStep === 'SIGNAL TRANSMITTED' && (
         <div className="w-full bg-green-500/10 border border-green-500/50 p-2 mb-6 rounded text-center text-[10px] text-green-400 uppercase tracking-widest font-bold animate-pulse shadow-[0_0_15px_rgba(34,197,94,0.2)]">
-          SUCCESS: SIGNAL TRANSMITTED TO BROADCAST SERVER
+          SUCCESS: SIGNAL TRANSMITTED TO OBS SERVER
         </div>
       )}
 
       {radioState === RadioState.ERROR && (
-        <div className="w-full bg-red-500/10 border border-red-500/50 p-2 mb-6 rounded text-center text-[10px] text-red-500 uppercase tracking-widest font-bold animate-pulse shadow-[0_0_15px_rgba(239,68,68,0.2)]">
+        <div className="w-full bg-red-500/10 border border-red-500/50 p-2 mb-6 rounded text-center text-[10px] text-red-500 uppercase tracking-widest font-bold animate-pulse">
           ERROR: {generationStep || 'SIGNAL JAMMED'}
         </div>
       )}
@@ -253,15 +264,15 @@ const App: React.FC = () => {
                 <div className="flex-1 flex flex-col justify-center min-w-0">
                   <div className="flex items-center justify-between">
                     <div className="inline-block px-2 py-0.5 bg-pink-500/20 text-pink-500 text-[8px] font-bold rounded mb-1 w-fit tracking-widest uppercase">
-                      {radioState === RadioState.PLAYING ? 'Playing' : 'Latest Signal'}
+                      Preview Channel
                     </div>
                     {activeBroadcast && (
                       <button 
-                        onClick={downloadActiveSignal}
-                        className="flex items-center gap-2 text-[10px] text-cyan-400 hover:text-white transition-colors uppercase font-bold tracking-tighter"
+                        onClick={() => playBroadcast(activeBroadcast)}
+                        className="flex items-center gap-2 text-[10px] text-pink-400 hover:text-white transition-colors uppercase font-bold tracking-tighter"
                       >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                        Extract
+                        <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                        Test Audio
                       </button>
                     )}
                   </div>
@@ -269,7 +280,7 @@ const App: React.FC = () => {
                     {activeBroadcast?.title || 'System Standby'}
                   </h2>
                   <p className="text-slate-400 text-sm italic mt-1 overflow-hidden line-clamp-3 font-mono leading-snug">
-                    {activeBroadcast?.script || 'Awaiting rebel input. Transmitted signals are routed to the cloud for live broadcast.'}
+                    {activeBroadcast?.script || 'Signals are transmitted to the cloud. Open the Observer Link in OBS to hear the live feed.'}
                   </p>
                 </div>
               </div>
@@ -305,9 +316,6 @@ const App: React.FC = () => {
                     />
                   ))}
                 </div>
-                {isQuotaExhausted && (
-                  <span className="text-[9px] text-pink-500/60 font-mono ml-2 uppercase">RESET: {getTimeRemaining()}</span>
-                )}
               </div>
             </div>
             
@@ -315,21 +323,19 @@ const App: React.FC = () => {
               <textarea 
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                disabled={isQuotaExhausted}
-                placeholder={isQuotaExhausted ? "ENCRYPTION LIMIT REACHED. WAIT FOR SIGNAL REGEN." : mode === BroadcastMode.CREATIVE ? "PROMPT: Describe the sound vibe..." : "TERMINAL: Enter literal broadcast script..."}
-                className={`bg-black/80 border rounded-lg p-4 font-mono text-sm transition-all min-h-[100px] resize-none focus:outline-none focus:ring-1 ${isQuotaExhausted ? 'border-slate-800 text-slate-700 cursor-not-allowed' : mode === BroadcastMode.CREATIVE ? 'border-cyan-500/30 text-cyan-400 placeholder-cyan-900/40 focus:border-cyan-500 focus:ring-cyan-500' : 'border-pink-500/30 text-pink-400 placeholder-pink-900/40 focus:border-pink-500 focus:ring-pink-500'}`}
+                disabled={quota.count >= 5}
+                placeholder={quota.count >= 5 ? "ENCRYPTION LIMIT REACHED." : "TERMINAL: Enter signal parameters..."}
+                className={`bg-black/80 border rounded-lg p-4 font-mono text-sm transition-all min-h-[100px] resize-none focus:outline-none focus:ring-1 ${quota.count >= 5 ? 'border-slate-800 text-slate-700 cursor-not-allowed' : mode === BroadcastMode.CREATIVE ? 'border-cyan-500/30 text-cyan-400 focus:border-cyan-500' : 'border-pink-500/30 text-pink-400 focus:border-pink-500'}`}
               />
               <button 
                 onClick={handleGenerate}
-                disabled={radioState === RadioState.GENERATING || !prompt.trim() || isQuotaExhausted}
-                className={`group relative font-bold py-4 rounded-lg uppercase tracking-[0.2em] transition-all overflow-hidden ${mode === BroadcastMode.CREATIVE ? 'bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-900' : 'bg-pink-600 hover:bg-pink-500 disabled:bg-slate-900'} text-white shadow-lg`}
+                disabled={radioState === RadioState.GENERATING || !prompt.trim() || quota.count >= 5}
+                className={`group relative font-bold py-4 rounded-lg uppercase tracking-[0.2em] transition-all overflow-hidden ${mode === BroadcastMode.CREATIVE ? 'bg-cyan-600 hover:bg-cyan-500' : 'bg-pink-600 hover:bg-pink-500'} text-white shadow-lg disabled:opacity-50`}
               >
                 <span className="relative z-10">
-                  {isQuotaExhausted ? 'QUOTA DEPLETED' : radioState === RadioState.GENERATING ? generationStep : 'TRANSMIT SIGNAL'}
+                  {radioState === RadioState.GENERATING ? generationStep : 'TRANSMIT SIGNAL'}
                 </span>
-                {!isQuotaExhausted && (
-                  <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
-                )}
+                <div className="absolute inset-0 bg-white/10 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
               </button>
             </div>
           </section>
@@ -343,16 +349,9 @@ const App: React.FC = () => {
             <span className="text-cyan-900 text-[8px] font-mono uppercase">Total Transmissions: {broadcasts.length}</span>
           </div>
           <div className="flex-1 overflow-y-auto pr-2 space-y-4 scroll-smooth custom-scrollbar">
-            {broadcasts.length === 0 ? (
-              <div className="text-cyan-900/40 p-12 text-center italic border border-dashed border-cyan-900/30 rounded-xl flex flex-col items-center gap-3">
-                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="opacity-20"><path d="M12 20v-8m0 0V4m0 8h8m-8 0H4"/></svg>
-                <span className="text-[10px] tracking-widest uppercase">No active signals found.</span>
-              </div>
-            ) : (
-              broadcasts.map(b => (
-                <BroadcastCard key={b.id} broadcast={b} onPlay={playBroadcast} />
-              ))
-            )}
+            {broadcasts.map(b => (
+              <BroadcastCard key={b.id} broadcast={b} onPlay={playBroadcast} />
+            ))}
           </div>
         </div>
       </div>
@@ -363,7 +362,6 @@ const App: React.FC = () => {
             <span className={cloudStatus === 'connected' ? 'text-green-500/50' : ''}>LINK: {cloudStatus.toUpperCase()}</span>
             <span>FREQ: 101.9 MHz</span>
         </div>
-        <div>Transmitter: Nominal</div>
       </footer>
     </div>
   );

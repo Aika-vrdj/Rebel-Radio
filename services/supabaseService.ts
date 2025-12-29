@@ -1,14 +1,14 @@
 
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.45.1';
+import { createClient, RealtimeChannel } from 'https://esm.sh/@supabase/supabase-js@2.45.1';
 import { Broadcast, BroadcastMode } from "../types";
 
 const supabaseUrl = 'https://cxgcwtsrzktbmmkcmndg.supabase.co';
 const supabaseAnonKey = 'sb_publishable_T24vegMuC2ep_aW4VQH98g_CUcgUI6L';
 
 const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
-const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseAnonKey) : null;
+export const supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
-const LOCAL_STORAGE_KEY = 'rebel_radio_broadcasts_fallback_v2';
+const LOCAL_STORAGE_KEY = 'rebel_radio_broadcasts_fallback_v3';
 const LOCAL_QUOTA_KEY = 'rebel_radio_quota_fallback';
 
 let schemaErrorDetected = false;
@@ -35,18 +35,45 @@ export const getCloudStatus = () => {
   return 'connecting';
 };
 
+export const subscribeToNewBroadcasts = (onNewBroadcast: (broadcast: Broadcast) => void): RealtimeChannel | null => {
+  if (!supabase) return null;
+
+  const channel = supabase
+    .channel('broadcasts_live')
+    .on(
+      'postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'broadcasts' },
+      (payload) => {
+        const row = payload.new;
+        const broadcast: Broadcast = {
+          id: row.id.toString(),
+          title: "Incoming Signal",
+          prompt: "Live Transmission",
+          script: row.content,
+          audioData: row.audio_base_64 || row.audio_base64 || '',
+          imageUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${row.id}`,
+          mode: (row.mode?.toUpperCase() as BroadcastMode) || BroadcastMode.CREATIVE,
+          createdAt: new Date(row.created_at).getTime()
+        };
+        onNewBroadcast(broadcast);
+      }
+    )
+    .subscribe();
+
+  return channel;
+};
+
 export const saveBroadcast = async (broadcast: Broadcast): Promise<void> => {
   const clientId = getClientId();
   
   if (supabase && !schemaErrorDetected) {
     try {
-      // NEW SCHEMA: client_id, content, audio_base64, mode
       const { error: broadcastError } = await supabase
         .from('broadcasts')
         .insert([{
           client_id: clientId,
           content: broadcast.script,
-          audio_base64: broadcast.audioData,
+          audio_base_64: broadcast.audioData, // Matches your column names
           mode: broadcast.mode.toLowerCase()
         }]);
 
@@ -62,7 +89,7 @@ export const saveBroadcast = async (broadcast: Broadcast): Promise<void> => {
       
       lastCallSuccessful = true;
     } catch (e) {
-      console.warn("Cloud save failed, falling back to minimal local storage.");
+      console.warn("Cloud save failed.");
       saveToLocal(broadcast);
     }
   } else {
@@ -74,17 +101,9 @@ const saveToLocal = (broadcast: Broadcast) => {
   try {
     const data = localStorage.getItem(LOCAL_STORAGE_KEY);
     const existing = data ? JSON.parse(data) : [];
-    // CRITICAL: Limit to 1 item to prevent QuotaExceededError (Base64 PCM is heavy)
     const updated = [broadcast, ...existing].slice(0, 1);
     localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.error("Local storage fallback failed entirely:", e);
-    // If it still fails, try to save without audio just for history tracking
-    try {
-       const minimal = [{...broadcast, audioData: ''}];
-       localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(minimal));
-    } catch (err) {}
-  }
+  } catch (e) {}
   
   const qData = localStorage.getItem(LOCAL_QUOTA_KEY);
   const quota = qData ? JSON.parse(qData) : { count: 0, resetAt: Date.now() + 86400000 };
@@ -94,26 +113,21 @@ const saveToLocal = (broadcast: Broadcast) => {
 export const getBroadcasts = async (): Promise<Broadcast[]> => {
   if (supabase && !schemaErrorDetected) {
     try {
-      // Fetch new schema columns
       const { data, error } = await supabase
         .from('broadcasts')
-        .select('id, content, audio_base64, mode, created_at')
+        .select('id, content, audio_base_64, mode, created_at')
         .order('created_at', { ascending: false })
         .limit(30);
 
-      if (error) {
-        if (error.code === 'PGRST205') schemaErrorDetected = true;
-        return getFromLocal();
-      }
+      if (error) return getFromLocal();
       lastCallSuccessful = true;
       
-      // Map back to UI type
       return (data || []).map(row => ({
         id: row.id.toString(),
         title: "Underground Signal",
         prompt: "Transmitted Data",
         script: row.content,
-        audioData: row.audio_base_64 || row.audio_base64 || '', // Handle minor naming drift
+        audioData: row.audio_base_64 || '',
         imageUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${row.id}`,
         mode: row.mode ? (row.mode.toUpperCase() as BroadcastMode) : BroadcastMode.CREATIVE,
         createdAt: new Date(row.created_at).getTime()
@@ -143,10 +157,7 @@ export const getQuota = async (): Promise<QuotaData> => {
         .eq('id', clientId)
         .single();
 
-      if (error) {
-        if (error.code === 'PGRST205') schemaErrorDetected = true;
-        return { count: 0, resetAt: now + oneDay };
-      }
+      if (error) return { count: 0, resetAt: now + oneDay };
 
       lastCallSuccessful = true;
       const quota: QuotaData = { count: data.count, resetAt: data.resetAt };
